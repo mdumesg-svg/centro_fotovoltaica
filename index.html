@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 SCADA - Telemetría Energética & Control Térmico</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+    <style>
+        [data-theme="dark"] {
+            --bg-base: #080c14; --panel-bg: #0f172a; --card-bg: #1e293b;
+            --border-color: #334155; --border-focus: #3b82f6; --text-main: #ffffff;
+            --text-secondary: #cbd5e1; --text-muted: #94a3b8; --input-bg: #0f172a;
+            --flow-dashed: #64748b; --node-shadow: rgba(0, 0, 0, 0.6);
+            --modal-bg: rgba(15, 23, 42, 0.95);
+        }
+        [data-theme="light"] {
+            --bg-base: #f1f5f9; --panel-bg: #ffffff; --card-bg: #ffffff;
+            --border-color: #cbd5e1; --border-focus: #2563eb; --text-main: #0f172a;
+            --text-secondary: #334155; --text-muted: #64748b; --input-bg: #f8fafc;
+            --flow-dashed: #94a3b8; --node-shadow: rgba(0, 0, 0, 0.08);
+            --modal-bg: rgba(255, 255, 255, 0.95);
+        }
+        :root { --primary: #2563eb; --success: #10b981; --warning: #f59e0b; --danger: #ef4444; --purple: #8b5cf6; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; transition: background-color 0.2s, border-color 0.2s, color 0.2s; }
+        body { background-color: var(--bg-base); color: var(--text-main); padding: 20px; min-height: 100vh; }
+        .scada-container { max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+        header { background: var(--panel-bg); border: 2px solid var(--border-color); border-radius: 10px; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; box-shadow: 0 4px 12px var(--node-shadow); }
+        .sys-title { display: flex; align-items: center; gap: 16px; }
+        .sys-title h1 { font-size: 1.3rem; font-weight: 800; color: var(--text-main); }
+        
+       
+        .visitor-counter { display: flex; align-items: center; gap: 6px; background: rgba(59, 130, 246, 0.1); border: 1px solid var(--border-focus); padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--border-focus); }
+
+        .sys-status-bar { display: flex; align-items: center; gap: 16px; font-size: 0.88rem; font-family: 'JetBrains Mono', monospace; font-weight: 700; }
+        .status-pill { display: flex; align-items: center; gap: 8px; background: rgba(239, 68, 68, 0.15); border: 1.5px solid var(--danger); color: var(--danger); padding: 5px 12px; border-radius: 6px; font-weight: 700; }
+        .status-pill.connected { background: rgba(16, 185, 129, 0.15); border-color: var(--success); color: var(--success); }
+        .indicator-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+        .status-pill.connected .indicator-dot { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        
+        .btn-admin { background: rgba(59, 130, 246, 0.15); border: 2px solid var(--border-focus); color: var(--text-main); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-weight: 700; display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }
+        .btn-admin.logged-in { background: rgba(16, 185, 129, 0.2); border-color: var(--success); color: var(--success); }
+        
+        .btn-theme-toggle { background: var(--card-bg); border: 2px solid var(--border-color); color: var(--warning); width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 1.25rem; }
+        .grid-status-alert { display: flex; justify-content: space-between; align-items: center; background: rgba(16, 185, 129, 0.12); border: 2px solid var(--success); padding: 14px 20px; border-radius: 8px; font-size: 0.92rem; font-weight: 700; color: var(--success); }
+        .grid-status-alert.outage { background: rgba(239, 68, 68, 0.15); border-color: var(--danger); color: var(--danger); }
+        .main-dashboard-grid { display: grid; grid-template-columns: 1fr 420px; gap: 16px; }
+        @media (max-width: 1024px) { .main-dashboard-grid { grid-template-columns: 1fr; } }
+        .left-controls-section { display: flex; flex-direction: column; gap: 16px; }
+        .metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+        @media (max-width: 600px) { .metrics-grid { grid-template-columns: 1fr; } }
+        .metric-card { background: var(--card-bg); border: 2px solid var(--border-color); border-radius: 10px; padding: 18px; position: relative; box-shadow: 0 4px 12px var(--node-shadow); }
+        .metric-card::before { content: ''; position: absolute; top: 0; left: 0; width: 5px; height: 100%; background: var(--border-focus); border-top-left-radius: 10px; border-bottom-left-radius: 10px; }
+        .metric-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .metric-title { font-size: 0.8rem; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); }
+        .metric-value-box { display: flex; align-items: baseline; gap: 6px; }
+        .metric-value { font-family: 'JetBrains Mono', monospace; font-size: 2rem; font-weight: 800; color: var(--text-main); }
+        .metric-unit { font-size: 0.95rem; font-weight: 700; color: var(--text-secondary); }
+        .metric-footer { margin-top: 10px; font-size: 0.8rem; font-weight: 700; color: var(--text-secondary); display: flex; justify-content: space-between; }
+        .scada-panel { background: var(--panel-bg); border: 2px solid var(--border-color); border-radius: 10px; padding: 20px; box-shadow: 0 4px 12px var(--node-shadow); }
+        .panel-heading { font-size: 0.95rem; font-weight: 800; text-transform: uppercase; color: var(--text-main); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; border-bottom: 2px solid var(--border-color); padding-bottom: 10px; }
+        .control-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+        .control-unit { background: var(--card-bg); border: 2px solid var(--border-color); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+        .control-unit label { font-size: 0.85rem; font-weight: 700; color: var(--text-secondary); }
+        .scada-input { width: 100%; background: var(--input-bg); border: 2px solid var(--border-color); color: var(--text-main); padding: 9px 12px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 1rem; font-weight: 700; outline: none; }
+        .segmented-selector { display: flex; background: var(--input-bg); padding: 4px; border-radius: 6px; border: 2px solid var(--border-color); }
+        .segmented-btn { flex: 1; padding: 7px; border: none; background: transparent; color: var(--text-secondary); font-weight: 800; font-size: 0.82rem; border-radius: 4px; cursor: pointer; }
+        .segmented-btn.active { background: var(--primary); color: #ffffff; }
+        .status-badge-tech { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; font-weight: 800; padding: 4px 10px; border-radius: 4px; text-transform: uppercase; }
+        .status-badge-tech.off { background: rgba(148, 163, 184, 0.2); color: var(--text-secondary); border: 1px solid var(--border-color); }
+        .status-badge-tech.on-bat { background: rgba(139, 92, 246, 0.25); color: #c084fc; border: 1.5px solid var(--purple); }
+        .status-badge-tech.on-fan { background: rgba(239, 68, 68, 0.25); color: #fca5a5; border: 1.5px solid var(--danger); }
+        .btn-action-scada { width: 100%; padding: 11px; border: none; border-radius: 6px; font-size: 0.85rem; font-weight: 800; cursor: pointer; background: var(--primary); color: white; display: flex; justify-content: center; align-items: center; gap: 8px; }
+        .btn-action-scada.danger { background: var(--danger); }
+        .btn-action-scada.purple { background: var(--purple); }
+        .btn-action-scada:disabled { opacity: 0.4; cursor: not-allowed; }
+        
+        .locked-controls { pointer-events: none; opacity: 0.5; filter: grayscale(40%); }
+
+        
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(4px); display: flex; justify-content: center; align-items: center; z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        .modal-card { background: var(--panel-bg); border: 2px solid var(--border-focus); border-radius: 12px; padding: 24px; width: 340px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 16px; transform: scale(0.9); transition: transform 0.3s ease; }
+        .modal-overlay.active .modal-card { transform: scale(1); }
+        .modal-header { font-size: 1.1rem; font-weight: 800; display: flex; align-items: center; gap: 8px; color: var(--text-main); border-bottom: 2px solid var(--border-color); padding-bottom: 10px; }
+        .modal-body { display: flex; flex-direction: column; gap: 12px; }
+        .modal-body label { font-size: 0.82rem; font-weight: 700; color: var(--text-secondary); }
+        .modal-input { width: 100%; background: var(--input-bg); border: 2px solid var(--border-color); color: var(--text-main); padding: 10px 12px; border-radius: 6px; font-size: 0.95rem; outline: none; }
+        .modal-input:focus { border-color: var(--border-focus); }
+        .modal-footer { display: flex; gap: 10px; margin-top: 4px; }
+        .modal-btn { flex: 1; padding: 10px; border: none; border-radius: 6px; font-weight: 800; cursor: pointer; font-size: 0.85rem; }
+        .modal-btn.confirm { background: var(--primary); color: white; }
+        .modal-btn.cancel { background: var(--card-bg); border: 2px solid var(--border-color); color: var(--text-secondary); }
+
+        .flow-card { background: var(--panel-bg); border: 2px solid var(--border-color); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 480px; box-shadow: 0 4px 12px var(--node-shadow); }
+        .flow-wrapper { position: relative; width: 100%; height: 100%; min-height: 380px; }
+        .flow-svg { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+        .flow-line-dashed { fill: none; stroke: var(--flow-dashed); stroke-width: 3.5; stroke-dasharray: 6 6; }
+        .flow-line-active-yellow { fill: none; stroke: #eab308; stroke-width: 5; transition: opacity 0.3s; opacity: 0; }
+        .flow-line-active-yellow.visible { opacity: 1; }
+        .circle-node { position: absolute; width: 95px; height: 95px; border-radius: 50%; background: var(--card-bg); border: 3px solid var(--border-color); display: flex; align-items: center; justify-content: center; transform: translate(-50%, -50%); box-shadow: 0 6px 16px var(--node-shadow); }
+        .circle-node i { font-size: 2.4rem; }
+        .node-house { top: 22%; left: 50%; border-color: #0284c7; color: #0284c7; }
+        .node-source { top: 78%; left: 22%; border-color: #10b981; color: #10b981; }
+        .node-pv { top: 78%; left: 78%; border-color: #f59e0b; color: #f59e0b; }
+        .node-source.bat-mode { border-color: #8b5cf6; color: #8b5cf6; }
+        .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 16px; }
+        .chart-card { background: var(--panel-bg); border: 2px solid var(--border-color); border-radius: 10px; padding: 18px; box-shadow: 0 4px 12px var(--node-shadow); }
+        .chart-header { font-size: 0.88rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; text-transform: uppercase; }
+        .canvas-container { position: relative; height: 260px; width: 100%; }
+    </style>
+</head>
+<body>
+
+    
+    <div id="admin-modal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <i class="fa-solid fa-shield-halved" style="color: var(--border-focus);"></i> Acceso Administrador
+            </div>
+            <div class="modal-body">
+                <div>
+                    <label>Usuario</label>
+                    <input type="text" id="admin-user-input" class="modal-input" placeholder="Ingrese usuario">
+                </div>
+                <div>
+                    <label>Contraseña</label>
+                    <input type="password" id="admin-pass-input" class="modal-input" placeholder="Ingrese contraseña">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn cancel" onclick="closeAdminModal()">Cancelar</button>
+                <button class="modal-btn confirm" onclick="submitAdminLogin()">Ingresar</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="scada-container">
+        <header>
+            <div class="sys-title">
+                <i class="fa-solid fa-server" style="color: var(--primary);"></i>
+                <h1>SISTEMA SCADA ENERGÉTICO</h1>
+                
+                <div class="visitor-counter" title="Usuarios viendo la página actualmente">
+                    <i class="fa-solid fa-users"></i> En línea: <span id="visitor-count">1</span>
+                </div>
+            </div>
+            <div class="sys-status-bar">
+                <button id="btn-admin-login" class="btn-admin" onclick="openAdminModal()">
+                    <i class="fa-solid fa-lock" id="admin-icon"></i> <span id="admin-text">MODO ESPECTADOR</span>
+                </button>
+                <div id="status-pill" class="status-pill">
+                    <span class="indicator-dot"></span> <span id="ws-status-text">DESCONECTADO</span>
+                </div>
+                <button class="btn-theme-toggle" onclick="toggleTheme()"><i id="theme-icon" class="fa-solid fa-sun"></i></button>
+            </div>
+        </header>
+
+        <div id="grid-status-alert" class="grid-status-alert outage">
+            <div>
+                <i id="grid-icon" class="fa-solid fa-triangle-exclamation" style="margin-right: 8px;"></i>
+                <span id="grid-status-text">ESPERANDO DATOS DEL SISTEMA...</span>
+            </div>
+            <span id="grid-subtext" style="font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;">En línea</span>
+        </div>
+
+        <div class="main-dashboard-grid">
+            <div class="left-controls-section">
+                <div class="metrics-grid">
+                    <div class="metric-card" style="border-left-color: var(--purple);">
+                        <div class="metric-header"><span class="metric-title">Consumo Batería DC</span><i class="fa-solid fa-car-battery"></i></div>
+                        <div class="metric-value-box"><span class="metric-value" id="val-bat-power">0.00</span><span class="metric-unit">W</span></div>
+                        <div class="metric-footer"><span id="val-bat-current">I_descarga: 0 mA</span><span>Reserva</span></div>
+                    </div>
+
+                    <div class="metric-card" style="border-left-color: var(--warning);">
+                        <div class="metric-header"><span class="metric-title">Monitoreo Red AC</span><i class="fa-solid fa-bolt"></i></div>
+                        <div class="metric-value-box"><span class="metric-value" id="val-volts">--</span><span class="metric-unit">V</span></div>
+                        <div class="metric-footer"><span id="val-power">Potencia: 0.00 W</span><span>Principal</span></div>
+                    </div>
+
+                    <div class="metric-card" style="border-left-color: var(--danger); grid-column: span 2;">
+                        <div class="metric-header"><span class="metric-title">Temperatura Ambiente</span><i class="fa-solid fa-temperature-half"></i></div>
+                        <div class="metric-value-box"><span class="metric-value" id="val-temp">--</span><span class="metric-unit">°C</span></div>
+                        <div class="metric-footer"><span>Sensor Térmico</span><span>Control Automático</span></div>
+                    </div>
+                </div>
+
+                <div class="scada-panel">
+                    <div class="panel-heading"><i class="fa-solid fa-sliders"></i> Control de Actuadores (Visualización de Estados)</div>
+                    <div id="actuators-control-container" class="control-grid locked-controls">
+                        <div class="control-unit">
+                            <label>Relé 1: Transferencia Batería</label>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.82rem; color: var(--text-secondary);">Estado:</span>
+                                <span id="relay-bat-badge" class="status-badge-tech off">INACTIVO</span>
+                            </div>
+                            <button id="btn-toggle-bat" class="btn-action-scada purple" onclick="toggleBatteryRelay()">FORZAR TRANSFERENCIA</button>
+                        </div>
+
+                        <div class="control-unit">
+                            <label>Relé 2: Ventilador (Térmico)</label>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.82rem; color: var(--text-secondary);">Estado:</span>
+                                <span id="relay-fan-badge" class="status-badge-tech off">INACTIVO</span>
+                            </div>
+                            <button id="btn-toggle-fan" class="btn-action-scada" onclick="toggleFanRelayManual()" disabled>CONMUTAR VENTILADOR</button>
+                        </div>
+
+                        <div class="control-unit">
+                            <label for="temp-limit">Setpoint Térmico (°C)</label>
+                            <input type="number" id="temp-limit" class="scada-input" value="50" min="10" max="80" onchange="updateSettings()">
+                            <div class="segmented-selector">
+                                <button id="btn-mode-auto" class="segmented-btn active" onclick="setFanMode('auto')">AUTO</button>
+                                <button id="btn-mode-manual" class="segmented-btn" onclick="setFanMode('manual')">MANUAL</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flow-card">
+                <div class="panel-heading" style="width: 100%; justify-content: center; margin-bottom: 0;"><i class="fa-solid fa-diagram-project"></i> Flujo Energético</div>
+                <div class="flow-wrapper">
+                    <svg class="flow-svg" viewBox="0 0 400 360">
+                        <path class="flow-line-dashed" d="M 90 280 C 160 280, 190 220, 190 140 L 190 80" />
+                        <path class="flow-line-dashed" d="M 310 280 C 240 280, 210 220, 210 140 L 210 80" />
+                        <path id="line-grid-house" class="flow-line-active-yellow" d="M 90 280 C 160 280, 190 220, 190 140 L 190 80" />
+                        <path id="line-pv-house" class="flow-line-active-yellow" d="M 310 280 C 240 280, 210 220, 210 140 L 210 80" />
+                    </svg>
+                    <div class="circle-node node-house"><i class="fa-solid fa-house"></i></div>
+                    <div id="node-source" class="circle-node node-source"><i id="node-source-icon" class="fa-solid fa-tower-cell"></i></div>
+                    <div class="circle-node node-pv"><i class="fa-solid fa-solar-panel"></i></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-grid">
+            <div class="chart-card">
+                <div class="chart-header"><i class="fa-solid fa-chart-line" style="color: var(--purple);"></i> Potencia (Batería vs Red)</div>
+                <div class="canvas-container"><canvas id="chartPower"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-header"><i class="fa-solid fa-chart-area" style="color: var(--danger);"></i> Comportamiento Térmico</div>
+                <div class="canvas-container"><canvas id="chartClimate"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const topicStatus = 'esp32_energia/status';
+        const topicCmd = 'esp32_energia/cmd';
+
+        const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+
+        let isGridPowerActive = true;
+        let isBatteryRelayActive = false;
+        let isFanRelayActive = false;
+        let fanMode = 'auto';
+        let isAdminLoggedIn = false;
+        const historyLength = 15;
+
+        let lastPacketTime = Date.now();
+        const connectionTimeout = 6000;
+
+        
+        function initVisitorCounter() {
+            let currentViews = parseInt(localStorage.getItem('scada_active_users') || '0');
+            currentViews += 1;
+            localStorage.setItem('scada_active_users', currentViews);
+            document.getElementById('visitor-count').innerText = currentViews;
+
+            window.addEventListener('beforeunload', () => {
+                let views = parseInt(localStorage.getItem('scada_active_users') || '1');
+                views = Math.max(1, views - 1);
+                localStorage.setItem('scada_active_users', views);
+            });
+
+         
+            window.addEventListener('storage', (e) => {
+                if (e.key === 'scada_active_users') {
+                    document.getElementById('visitor-count').innerText = e.newValue || '1';
+                }
+            });
+        }
+        initVisitorCounter();
+
+    
+        function openAdminModal() {
+            if (!isAdminLoggedIn) {
+                document.getElementById('admin-modal').classList.add('active');
+                document.getElementById('admin-user-input').value = '';
+                document.getElementById('admin-pass-input').value = '';
+                document.getElementById('admin-user-input').focus();
+            } else {
+               
+                isAdminLoggedIn = false;
+                document.getElementById('actuators-control-container').classList.add('locked-controls');
+                const btnAdmin = document.getElementById('btn-admin-login');
+                btnAdmin.className = "btn-admin";
+                document.getElementById('admin-icon').className = "fa-solid fa-lock";
+                document.getElementById('admin-text').innerText = "MODO ESPECTADOR";
+            }
+        }
+
+        function closeAdminModal() {
+            document.getElementById('admin-modal').classList.remove('active');
+        }
+
+        function submitAdminLogin() {
+            const user = document.getElementById('admin-user-input').value;
+            const pass = document.getElementById('admin-pass-input').value;
+
+            if (user === "unemi" && pass === "unemi1212") {
+                isAdminLoggedIn = true;
+                document.getElementById('actuators-control-container').classList.remove('locked-controls');
+                const btnAdmin = document.getElementById('btn-admin-login');
+                btnAdmin.className = "btn-admin logged-in";
+                document.getElementById('admin-icon').className = "fa-solid fa-lock-open";
+                document.getElementById('admin-text').innerText = "MODO ADMINISTRADOR";
+                closeAdminModal();
+            } else {
+                alert("¡Credenciales incorrectas! Usuario o contraseña inválidos.");
+            }
+        }
+
+        function toggleTheme() {
+            const html = document.documentElement;
+            const icon = document.getElementById('theme-icon');
+            if (html.getAttribute('data-theme') === 'dark') {
+                html.setAttribute('data-theme', 'light');
+                icon.className = 'fa-solid fa-moon';
+            } else {
+                html.setAttribute('data-theme', 'dark');
+                icon.className = 'fa-solid fa-sun';
+            }
+        }
+
+        const ctxPower = document.getElementById('chartPower').getContext('2d');
+        const chartPower = new Chart(ctxPower, {
+            type: 'line',
+            data: { labels: [], datasets: [
+                { label: 'Batería (W)', data: [], borderColor: '#8b5cf6', fill: true, backgroundColor: 'rgba(139,92,246,0.1)' },
+                { label: 'Red (W)', data: [], borderColor: '#f59e0b', borderDash: [3,3] }
+            ]},
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+
+        const ctxClimate = document.getElementById('chartClimate').getContext('2d');
+        const chartClimate = new Chart(ctxClimate, {
+            type: 'line',
+            data: { labels: [], datasets: [
+                { label: 'Temperatura (°C)', data: [], borderColor: '#ef4444', fill: true, backgroundColor: 'rgba(239,68,68,0.1)' }
+            ]},
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+
+        client.on('connect', () => {
+            console.log("Conectado al sistema de control");
+            client.subscribe(topicStatus);
+        });
+
+        client.on('message', (topic, message) => {
+            if (topic === topicStatus) {
+                try {
+                    const data = JSON.parse(message.toString());
+                    lastPacketTime = Date.now(); 
+                    processRealData(data);
+                } catch(e) {
+                    console.error("Error al procesar datos:", e);
+                }
+            }
+        });
+
+        setInterval(() => {
+            const now = Date.now();
+            const pill = document.getElementById('status-pill');
+            const statusText = document.getElementById('ws-status-text');
+            const alertBar = document.getElementById('grid-status-alert');
+            const alertText = document.getElementById('grid-status-text');
+
+            if (now - lastPacketTime > connectionTimeout) {
+                pill.className = "status-pill";
+                statusText.innerText = "DESCONECTADO";
+                alertBar.className = "grid-status-alert outage";
+                alertText.innerText = "¡ALERTA! SISTEMA DESCONECTADO O SIN SEÑAL";
+            } else {
+                pill.className = "status-pill connected";
+                statusText.innerText = "CONECTADO";
+            }
+        }, 1000);
+
+        function processRealData(data) {
+            isGridPowerActive = data.grid;
+            isBatteryRelayActive = data.batActive;
+            isFanRelayActive = data.fanActive;
+
+            updateGridStatusAlert();
+            updateBatteryRelayUI();
+            updateFanRelayUI();
+            updateFlowDiagram();
+
+            document.getElementById('val-temp').innerText = data.temp.toFixed(1);
+            document.getElementById('val-volts').innerText = data.volts.toFixed(2);
+            document.getElementById('val-power').innerText = `Potencia: ${data.power.toFixed(1)} mW`;
+            document.getElementById('val-bat-power').innerText = (data.batPower / 1000.0).toFixed(2);
+            document.getElementById('val-bat-current').innerText = `I_descarga: ${data.batCurrent.toFixed(0)} mA`;
+
+            const timeLabel = new Date().toLocaleTimeString();
+            chartPower.data.labels.push(timeLabel);
+            chartPower.data.datasets[0].data.push(data.batPower / 1000.0);
+            chartPower.data.datasets[1].data.push(data.power / 1000.0);
+
+            chartClimate.data.labels.push(timeLabel);
+            chartClimate.data.datasets[0].data.push(data.temp);
+
+            if (chartPower.data.labels.length > historyLength) {
+                chartPower.data.labels.shift();
+                chartPower.data.datasets[0].data.shift();
+                chartPower.data.datasets[1].data.shift();
+                chartClimate.data.labels.shift();
+                chartClimate.data.datasets[0].data.shift();
+            }
+            chartPower.update();
+            chartClimate.update();
+        }
+
+        function toggleBatteryRelay() {
+            if (!isAdminLoggedIn) return;
+            client.publish(topicCmd, "TOGGLE_BAT");
+        }
+
+        function toggleFanRelayManual() {
+            if (!isAdminLoggedIn) return;
+            if (fanMode === 'manual') {
+                client.publish(topicCmd, "TOGGLE_FAN");
+            }
+        }
+
+        function setFanMode(mode) {
+            if (!isAdminLoggedIn) return;
+            fanMode = mode.toLowerCase();
+            client.publish(topicCmd, "MODE:" + mode.toUpperCase());
+            document.getElementById('btn-mode-auto').className = fanMode === 'auto' ? 'segmented-btn active' : 'segmented-btn';
+            document.getElementById('btn-mode-manual').className = fanMode === 'manual' ? 'segmented-btn active' : 'segmented-btn';
+            document.getElementById('btn-toggle-fan').disabled = (fanMode === 'auto');
+        }
+
+        function updateSettings() {
+            if (!isAdminLoggedIn) return;
+            const val = parseFloat(document.getElementById('temp-limit').value);
+            if (!isNaN(val)) {
+                client.publish(topicCmd, "SET_TEMP:" + val);
+            }
+        }
+
+        function updateBatteryRelayUI() {
+            const badge = document.getElementById('relay-bat-badge');
+            const btn = document.getElementById('btn-toggle-bat');
+            if (isBatteryRelayActive) {
+                badge.innerText = "ACTIVO"; badge.className = "status-badge-tech on-bat";
+                btn.innerHTML = "DESACTIVAR TRANSFERENCIA"; btn.className = "btn-action-scada danger";
+            } else {
+                badge.innerText = "INACTIVO"; badge.className = "status-badge-tech off";
+                btn.innerHTML = "FORZAR TRANSFERENCIA"; btn.className = "btn-action-scada purple";
+            }
+        }
+
+        function updateFanRelayUI() {
+            const badge = document.getElementById('relay-fan-badge');
+            const btn = document.getElementById('btn-toggle-fan');
+            if (isFanRelayActive) {
+                badge.innerText = "ACTIVO"; badge.className = "status-badge-tech on-fan";
+                if (fanMode === 'manual') {
+                    btn.innerHTML = "APAGAR VENTILADOR"; btn.className = "btn-action-scada danger";
+                }
+            } else {
+                badge.innerText = "INACTIVO"; badge.className = "status-badge-tech off";
+                if (fanMode === 'manual') {
+                    btn.innerHTML = "ENCENDER VENTILADOR"; btn.className = "btn-action-scada";
+                }
+            }
+            
+            if (fanMode === 'auto') {
+                btn.innerHTML = "CONTROL AUTOMÁTICO (°C)";
+                btn.className = "btn-action-scada";
+            }
+        }
+
+        function updateGridStatusAlert() {
+            const alertBar = document.getElementById('grid-status-alert');
+            const icon = document.getElementById('grid-icon');
+            const text = document.getElementById('grid-status-text');
+            if (!isGridPowerActive) {
+                alertBar.className = "grid-status-alert outage";
+                icon.className = "fa-solid fa-triangle-exclamation";
+                text.innerText = "FALLA DE RED: CORTE DETECTADO";
+            } else {
+                alertBar.className = "grid-status-alert";
+                icon.className = "fa-solid fa-circle-check";
+                text.innerText = "RED ELÉCTRICA: Suministro Normal";
+            }
+        }
+
+        function updateFlowDiagram() {
+            const lineGrid = document.getElementById('line-grid-house');
+            const linePv = document.getElementById('line-pv-house');
+            const nodeSource = document.getElementById('node-source');
+            const iconSource = document.getElementById('node-source-icon');
+            if (isBatteryRelayActive) {
+                linePv.classList.add('visible'); lineGrid.classList.remove('visible');
+                nodeSource.className = "circle-node node-source bat-mode"; iconSource.className = "fa-solid fa-car-battery";
+            } else {
+                lineGrid.classList.add('visible'); linePv.classList.remove('visible');
+                nodeSource.className = "circle-node node-source"; iconSource.className = "fa-solid fa-tower-cell";
+            }
+        }
+    </script>
+</body>
+</html>
